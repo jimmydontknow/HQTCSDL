@@ -14,8 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(lost_update.router_a)     # Module 1A - Lost Update (khóa lạc quan)
-app.include_router(lost_update.router_b)     # Module 1B - Lost Update (khóa bi quan)
+app.include_router(lost_update.router)
 app.include_router(dirty_read.router)
 app.include_router(unrepeatable_read.router)
 app.include_router(phantom_read.router)

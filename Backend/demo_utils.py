@@ -72,7 +72,7 @@ def ensure_schema():
                 quantity INT NOT NULL CHECK (quantity >= 0),
                 version INT NOT NULL DEFAULT 0
             )""")
-        for name, price, qty in (("Gà đặc biệt", 150000, 1), ("Lẩu thái", 250000, 10)):
+        for name, price, qty in (("Gà đặc biệt", 150000, 1), ("Lẩu thái", 250000, 10), ("Bò lúc lắc", 100000, 20)):
             cur.execute("""
                 INSERT INTO foods (name, price, quantity)
                 SELECT %s, %s, %s WHERE NOT EXISTS (SELECT 1 FROM foods WHERE name = %s)

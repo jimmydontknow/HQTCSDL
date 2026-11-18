@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Booking from "./Booking";
-import SimHost from "./sim/SimHost";
+import ScriptHost from "./sim/ScriptHost";
 import { MODULES } from "./sim/modules";
 
 const TABS = [
@@ -23,13 +23,11 @@ export default function App() {
           ))}
         </div>
       </div>
-
       <div className="page">
-        {/* Trang Đặt bàn luôn tồn tại, chỉ ẩn đi: giữ nguyên mọi thứ đã nhập */}
         <div style={{ display: tab === "booking" ? "block" : "none" }}>
           <Booking active={tab === "booking"} />
         </div>
-        {tab !== "booking" && <SimHost key={tab} cfg={MODULES[tab]} />}
+        {tab !== "booking" && <ScriptHost key={tab} cfg={MODULES[tab]} />}
       </div>
     </>
   );

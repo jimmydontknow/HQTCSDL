@@ -1,95 +1,31 @@
-"""Module 1 (chia cho 2 người): Lost Update.
-   1A: khắc phục bằng khóa lạc quan (cột version)  -> function sp_lu1_order, món Gà đặc biệt
-   1B: khắc phục bằng khóa bi quan / UPDATE nguyên tử -> function sp_lu2_order, món Lẩu thái
-Logic thật nằm trong function SQL (sửa trực tiếp trong pgAdmin), file này chỉ gọi function đó."""
-from demo_utils import run_once, ensure_schema
-from sim import Room, make_router, to_int, to_float, call_sp
+from steps import Runner, make_router, val
 
 
-def make_module(prefix, tag, food, fn, file, how):
-    START = {"stock": 1}
-
-    def prepare(stock=1, **_):
-        ensure_schema()
-        START["stock"] = to_int(stock, 1, 1, 50)
-        run_once("UPDATE foods SET quantity=%s, version=0 WHERE name=%s", (START["stock"], food))
-
-    def snapshot():
-        ensure_schema()
-        return run_once("SELECT name, price, quantity, version FROM foods WHERE name=%s ORDER BY id LIMIT 1",
-                        (food,), fetch=True)[0]
-
-    def work(who, params, log, ctx):
-        qty = to_int(params.get("qty"), 1, 1, 50)
-        process = to_float(params.get("process"), 1.5, 0, 6)
-        wait = to_float(params.get("start_after"), 0, 0, 6)
-        log(f"Gọi {fn}(đặt {qty} suất, xử lý thanh toán {process:g}s, bấm sau {wait:g}s)")
-        out = call_sp(ctx, log, f"SELECT {fn}(%s, %s, %s, %s) AS r",
-                      (who, qty, process, wait), name=fn, hint=file)
-        if out["fatal"]:
-            return {"ok": False, "fatal": out["fatal"]}
-        if out["error"]:
-            log(f"Lỗi từ database: {out['error']}", "err")
-            return {"ok": False, "qty": qty, "error": out["error"]}
-        r = dict(out["res"] or {})
-        r.setdefault("qty", qty)
-        return r
-
-    def judge(room):
-        d = snapshot()
-        start = START["stock"]
-        res = room.results
-        sold = sum(r.get("qty", 0) for r in res.values() if r.get("ok"))
-        reduced = start - d["quantity"]
-        seen = {w: res[w].get("seen") for w in res}
-        bug = sold != reduced or sold > start
-
-        if bug:
-            return {
-                "bug": True,
-                "headline": f"LOST UPDATE: đã báo thành công {sold} suất nhưng kho chỉ giảm {reduced} (tồn kho ban đầu {start}).",
+def judge(key, R):
+    a_read, final = val(R, "a_read"), val(R, "final")
+    if a_read is None or final is None:
+        return {"bug": False, "headline": "Chưa phân tích được: thiếu kết quả bước đọc hoặc bước kiểm tra cuối.", "explain": [], "fix": []}
+    b_read = val(R, "b_read")
+    sold = sum(1 for k in ("a_write", "b_write") if (R.get(k) or {}).get("rowcount"))
+    reduced = a_read - final
+    if sold != reduced:
+        return {"bug": True,
+                "headline": f"LOST UPDATE: có {sold} lượt đặt thành công (UPDATE 1) nhưng kho chỉ giảm {reduced}.",
                 "explain": [
-                    f"Trong bảng thời gian, A và B cùng ĐỌC tồn kho (A thấy {seen.get('A')}, B thấy {seen.get('B')}) trước khi bên nào kịp ghi.",
-                    "Mỗi bên xử lý thanh toán một lúc (thời gian xử lý bạn nhập), rồi tự tính tồn kho mới = số đã đọc − số suất đặt, trên con số CŨ.",
-                    "Hai lệnh UPDATE đều gán một giá trị tuyệt đối (quantity = ...). Lệnh chạy sau ghi đè kết quả của lệnh chạy trước, nên một lượt đặt bị mất khỏi sổ sách.",
-                    f"Vị trí lỗi: trong function {fn} (mở trong pgAdmin), dòng đánh dấu [LỖI]: câu UPDATE gán thẳng quantity = (số đã đọc − số suất), tính trên số cũ.",
-                ],
-                "fix": [f"Mở file {file} trong pgAdmin, kéo tới chỗ '>>> SỬA TẠI ĐÂY <<<' và làm theo ghi chú ({how}), bấm F5, rồi quay lại bấm ▶ Chạy lại demo."],
-            }
-        conflicts = [w for w, r in res.items() if r.get("conflict")]
-        rejected = [w for w, r in res.items() if not r.get("ok")]
-        if conflicts:
-            why = (f"Màn hình {', '.join(conflicts)} bị từ chối đúng như thiết kế: câu UPDATE có điều kiện WHERE version = <version đã đọc>, "
-                   "bên UPDATE trước đã tăng version nên bên sau không còn dòng nào khớp (0 dòng bị ảnh hưởng).")
-        elif rejected:
-            why = (f"Màn hình {', '.join(rejected)} bị từ chối vì thấy kho đã hết: bên kia đã ghi xong trước khi bên này đọc hoặc kiểm tra điều kiện, "
-                   "nên không còn ghi đè nữa.")
-        else:
-            why = ("Hai bên không chồng lên nhau: bên đọc sau đã thấy kho đã giảm nên không ghi đè. "
-                   "Lỗi chỉ xảy ra khi hai bên ĐỌC trước rồi mới GHI. Hãy để 'Bấm sau' của cả hai bằng 0, tồn kho = 1 và chạy bản function gây lỗi.")
-        return {
-            "bug": False,
-            "headline": f"Không mất dữ liệu: đã bán {sold} suất và kho giảm đúng {reduced}.",
-            "explain": [
-                why,
-            ],
-            "fix": ["Bên bị từ chối cần đọc lại dữ liệu rồi đặt lại (retry). Thử tăng tồn kho lên 2 rồi bấm 'Làm lại từ đầu' để thấy bên bị từ chối đặt lại thành công."]
-                   if conflicts else [],
-        }
-
-    room = Room(works={"run": work}, judge=judge, snapshot=snapshot, prepare=prepare, default_mode="run")
-    return make_router(prefix, tag, room)
+                    f"Ở t1 và t2, T1 và T2 cùng đọc tồn kho (T1 thấy {a_read}, T2 thấy {b_read}) trước khi bên nào ghi.",
+                    "Ở t3, T1 ghi quantity = 0 (tính từ số cũ) rồi COMMIT. Ở t4, T2 cũng ghi quantity = 0 (cũng tính từ số cũ) và ghi đè kết quả của T1.",
+                    "Hai lệnh UPDATE đều gán một giá trị tuyệt đối nên không bên nào biết bên kia đã sửa. Một lượt đặt bị mất khỏi sổ sách.",
+                    "Dòng gây lỗi: các dòng có chú thích '-- LỖI' ở bước t3 và t4."],
+                "fix": ["Chọn kịch bản 'Sửa 1' (version), 'Sửa 2' (FOR UPDATE) hoặc 'Sửa 3' (UPDATE nguyên tử) và so sánh các dòng có chú thích '-- SỬA'."]}
+    if key == "sua_version" or (R.get("b_write") or {}).get("rowcount") == 0:
+        why = "Câu UPDATE của T2 có điều kiện version = 0 nhưng T1 đã tăng version lên 1 nên 0 dòng bị ảnh hưởng (UPDATE 0). T2 bị từ chối."
+    elif key == "sua_for_update":
+        why = f"T2 bị CHỜ ở t2 vì T1 giữ khóa dòng (FOR UPDATE). Sau khi T1 COMMIT, T2 đọc ra {b_read} suất nên không đặt được."
+    else:
+        why = "T2 bị CHỜ ở t4 vì T1 chưa COMMIT. Sau khi T1 COMMIT, T2 chạy lại điều kiện quantity >= 1 và không còn dòng nào khớp."
+    return {"bug": False,
+            "headline": f"Không mất dữ liệu: bán {sold} suất và kho giảm đúng {reduced}.",
+            "explain": [why, "Dòng sửa lỗi: các dòng có chú thích '-- SỬA'."], "fix": []}
 
 
-router_a = make_module(
-    "/lost-update-1", "Module 1A - Lost Update (khóa lạc quan)",
-    food="Gà đặc biệt", fn="sp_lu1_order",
-    file="sql/m1a_lost_update_lac_quan.sql",
-    how="tắt dòng [LỖI], bật các dòng [SỬA] bằng Ctrl+/",
-)
-router_b = make_module(
-    "/lost-update-2", "Module 1B - Lost Update (khóa bi quan)",
-    food="Lẩu thái", fn="sp_lu2_order",
-    file="sql/m1b_lost_update_bi_quan.sql",
-    how="chọn CÁCH 1 (FOR UPDATE) hoặc CÁCH 2 (UPDATE nguyên tử)",
-)
+router = make_router("/lost-update", "Module 1 - Lost Update", Runner("m1_lost_update.sql", judge))
