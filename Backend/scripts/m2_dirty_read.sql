@@ -6,7 +6,28 @@
 -- nên kết quả luôn là T2 thấy 100000. Đoạn T-SQL tham khảo cho SQL Server ở cuối file.
 -- =====================================================================
 
-=== ru | T2 dùng READ UNCOMMITTED, T1 ROLLBACK | T2 yêu cầu mức thấp nhất nhưng PostgreSQL vẫn không cho đọc dữ liệu chưa COMMIT.
+=== sim_sqlserver | Gây lỗi (MÔ PHỎNG SQL Server): T2 đọc dữ liệu chưa COMMIT | Mô phỏng theo SQL Server: T2 dùng READ UNCOMMITTED nên đọc được giá chưa COMMIT của T1, rồi T1 ROLLBACK. Các câu T-SQL này KHÔNG chạy trên PostgreSQL.
+--- t1 | T1
+BEGIN TRANSACTION;
+--> BEGIN TRANSACTION
+UPDATE foods SET price = 50000 WHERE name = N'Bò lúc lắc';        -- LỖI: T1 sửa giá nhưng CHƯA COMMIT
+--> (1 row affected)
+--- t2 | T2 | t2_read
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;                  -- LỖI: cho phép đọc dữ liệu chưa COMMIT
+--> Commands completed successfully.
+BEGIN TRANSACTION;
+--> BEGIN TRANSACTION
+SELECT price FROM foods WHERE name = N'Bò lúc lắc';                -- LỖI: đọc được 50000 (giá chưa COMMIT)
+--> price = 50000
+COMMIT;
+--> COMMIT
+--- t3 | T1
+ROLLBACK;                                                          -- T1 hủy: giá quay về 100000
+--> ROLLBACK (giá thật vẫn là 100000)
+--- t4 | T2
+-- T2 đã dùng số 50000 (không tồn tại) để tính tiền cho khách: dữ liệu ảo.
+
+=== ru | Chạy thật PostgreSQL, sửa lỗi: T2 dùng READ UNCOMMITTED, T1 ROLLBACK | T2 yêu cầu mức thấp nhất nhưng PostgreSQL vẫn không cho đọc dữ liệu chưa COMMIT.
 --- setup | SYS
 UPDATE foods SET price = 100000 WHERE name = 'Bò lúc lắc';
 --- t1 | T1
@@ -24,7 +45,7 @@ SELECT price FROM foods WHERE name = 'Bò lúc lắc';
 --- cleanup | SYS
 UPDATE foods SET price = 100000 WHERE name = 'Bò lúc lắc';
 
-=== rc | T2 dùng READ COMMITTED (mặc định) | Kết quả giống kịch bản trên: PostgreSQL không bao giờ cho dirty read.
+=== rc | Chạy thật PostgreSQL, sửa lỗi: T2 dùng READ COMMITTED (mặc định) | Kết quả giống kịch bản trên: PostgreSQL không bao giờ cho dirty read.
 --- setup | SYS
 UPDATE foods SET price = 100000 WHERE name = 'Bò lúc lắc';
 --- t1 | T1
@@ -42,7 +63,7 @@ SELECT price FROM foods WHERE name = 'Bò lúc lắc';
 --- cleanup | SYS
 UPDATE foods SET price = 100000 WHERE name = 'Bò lúc lắc';
 
-=== commit | T1 COMMIT (đối chiếu) | T2 chỉ thấy giá mới SAU KHI T1 COMMIT. Đây là hành vi đúng của PostgreSQL.
+=== commit | Chạy thật PostgreSQL, đối chiếu: T1 COMMIT (đối chiếu) | T2 chỉ thấy giá mới SAU KHI T1 COMMIT. Đây là hành vi đúng của PostgreSQL.
 --- setup | SYS
 UPDATE foods SET price = 100000 WHERE name = 'Bò lúc lắc';
 --- t1 | T1

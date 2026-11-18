@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { get, post, errText } from "../shared";
 
-const NEED_VERSION = 6;
+const NEED_VERSION = 7;
 
 const BADGE = {
   waiting: ["⏳ ĐANG CHỜ (bị khóa chặn)", "#fef3c7", "#b45309"],
@@ -108,6 +108,12 @@ export default function ScriptHost({ cfg }) {
           </label>
         ))}
       </div>
+      {st?.sim && (
+        <div className="note err" style={{ margin: "10px 0" }}>
+          <b>KỊCH BẢN MÔ PHỎNG THEO SQL SERVER.</b> Các câu T-SQL bên dưới <b>không chạy trên PostgreSQL</b>;
+          kết quả được ghi sẵn theo đúng hành vi của SQL Server khi dùng READ UNCOMMITTED. PostgreSQL không có lỗi này.
+        </div>
+      )}
       {st?.note && <div className="guide">{st.note}</div>}
 
       <div className="btn-row" style={{ margin: "10px 0" }}>

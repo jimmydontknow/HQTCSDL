@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from demo_utils import new_conn, ensure_schema
 
-VERSION = 6                      # web dùng số này để biết backend có đúng bản mới không
+VERSION = 7                      # web dùng số này để biết backend có đúng bản mới không
 WAIT = 1.3                       # giây chờ một bước trước khi coi là "đang chờ khóa"
 SCRIPT_DIR = Path(__file__).parent / "scripts"
 
@@ -31,7 +31,7 @@ def parse_script(path):
         m = SCN_RE.match(raw)
         if m:
             cur = {"key": m.group(1), "title": m.group(2), "note": m.group(3) or "",
-                   "setup": [], "cleanup": [], "steps": []}
+                   "setup": [], "cleanup": [], "steps": [], "sim": m.group(1).startswith("sim_")}
             scenarios.append(cur)
             step = None
             continue
@@ -55,6 +55,22 @@ def parse_script(path):
 def split_statements(lines):
     code = "\n".join(re.sub(r"--.*$", "", l) for l in lines)
     return [s.strip() for s in code.split(";") if s.strip()]
+
+
+def sim_statements(lines):
+    """Kịch bản mô phỏng (key bắt đầu bằng sim_): mỗi câu lệnh có thể kèm dòng '--> kết quả' ghi sẵn ngay dưới nó.
+    '--> price = 50000' sẽ thành một dòng kết quả có cột price = 50000 để hàm judge đọc được."""
+    out = []
+    for l in lines:
+        t = l.strip()
+        if t.startswith("-->"):
+            if out:
+                out[-1][1] = t[3:].strip()
+            continue
+        code = re.sub(r"--.*$", "", l).strip()
+        if code:
+            out.append([code.rstrip(";").strip(), ""])
+    return out
 
 
 def jv(v):
@@ -101,7 +117,20 @@ class Session:
             step["status"] = "error" if step.get("error") else "done"
             step["event"].set()
 
+    def _sim(self, step):
+        """Không chạy SQL: hiện kết quả ghi sẵn (hành vi của SQL Server) cho từng câu lệnh."""
+        for stmt, canned in sim_statements(step["lines"]):
+            e = {"stmt": " ".join(stmt.split()), "text": canned or "OK", "error": None, "rows": None, "status": None}
+            m = re.match(r"^(\w+)\s*=\s*(-?\d+)$", canned)
+            if m:
+                e["rows"] = [{m.group(1): int(m.group(2))}]
+                e["text"] = f"→ {m.group(1)} = {m.group(2)}"
+            time.sleep(0.15)
+            step["results"].append(e)
+
     def _exec(self, step, stmts):
+        if step.get("sim"):
+            return self._sim(step)
         cur = self.conn.cursor()
         for s in stmts:
             e = {"stmt": " ".join(s.split()), "text": "", "error": None, "rows": None, "status": None}
@@ -217,7 +246,7 @@ class Runner:
             self.steps, self.cursor, self.verdict, self.setup_lines = [], 0, None, []
             if not sc:
                 return
-            self.steps = [self._fresh(s) for s in sc["steps"]]
+            self.steps = [self._fresh({**s, "sim": sc.get("sim", False)}) for s in sc["steps"]]
             self.setup_lines = [l for s in sc["setup"] for l in s["lines"]]
             try:
                 for s in sc["cleanup"] + sc["setup"]:
@@ -279,10 +308,11 @@ class Runner:
         sc = self._scn()
         return {
             "v": VERSION, "file": self.file, "error": self.error,
-            "scenarios": [{"key": s["key"], "title": s["title"]} for s in self.scenarios],
+            "scenarios": [{"key": s["key"], "title": s["title"], "sim": s.get("sim", False)} for s in self.scenarios],
+            "sim": bool(sc and sc.get("sim")),
             "scenario": self.key, "note": sc["note"] if sc else "",
             "setup": self.setup_lines, "cursor": self.cursor, "total": len(self.steps), "auto": self.auto,
-            "steps": [{"idx": i, "time": s["time"], "who": s["who"], "id": s["id"], "lines": s["lines"],
+            "steps": [{"idx": i, "time": s["time"], "who": s["who"], "id": s["id"], "lines": [l for l in s["lines"] if not l.strip().startswith("-->")],
                        "status": s["status"], "waited": s["waited"],
                        "results": [{"text": r["text"], "error": r["error"]} for r in list(s["results"])]}
                       for i, s in enumerate(self.steps)],
